@@ -2,16 +2,10 @@
 name = "gssmr"
 id = "gssmr"
 basepath = "~/.gossamer/gssmr"
-log = "info"
+log = "crit"
 
 [log]
-core = ""
-network = ""
-rpc = ""
-state = ""
-runtime = ""
-babe = ""
-grandpa = "trace"
+grandpa = "debug"
 
 [init]
 genesis = "./chain/gssmr/genesis.json"
