@@ -135,7 +135,7 @@ func getFinalizedHeadByRound(endpoint string, round uint64) (common.Hash, error)
 	return common.MustHexToHash(hash), nil
 }
 
-func initAndStart(idx int, genesis string, outfile *os.File) {
+func initAndStart(idx int, genesis string, outfile *os.File) *exec.Cmd {
 	basepath := "~/.gossamer_" + keys[idx]
 
 	initCmd := exec.Command("../../ChainSafe/gossamer/bin/gossamer",
@@ -146,19 +146,13 @@ func initAndStart(idx int, genesis string, outfile *os.File) {
 		"--force",
 	)
 
-	stdoutPipe, err := initCmd.StdoutPipe()
-	if err != nil {
-		panic(err)
-	}
-
-	writer := bufio.NewWriter(outfile)
 	// init gossamer
-	err = initCmd.Run()
+	stdout, err := initCmd.CombinedOutput()
 	if err != nil {
 		panic(err)
 	}
 
-	go io.Copy(writer, stdoutPipe)
+	outfile.Write(stdout)
 	fmt.Println("initialized node", keys[idx])
 
 	gssmrCmd := exec.Command("../../ChainSafe/gossamer/bin/gossamer",
@@ -168,9 +162,10 @@ func initAndStart(idx int, genesis string, outfile *os.File) {
 		"--basepath", basepath,
 		"--rpcport", strconv.Itoa(8540+idx),
 		"--rpc",
+		"--log", "debug",
 	)
 
-	stdoutPipe, err = gssmrCmd.StdoutPipe()
+	stdoutPipe, err := gssmrCmd.StdoutPipe()
 	if err != nil {
 		panic(err)
 	}
@@ -180,7 +175,9 @@ func initAndStart(idx int, genesis string, outfile *os.File) {
 		panic(err)
 	}
 
+	writer := bufio.NewWriter(outfile)
 	go io.Copy(writer, stdoutPipe)
+	return gssmrCmd
 }
 
 func main() {
@@ -201,6 +198,8 @@ func main() {
 		}
 	}
 
+	fmt.Println("num nodes:", num)
+
 	var genesis string
 	switch num {
 	case 3:
@@ -212,6 +211,8 @@ func main() {
 	}
 
 	// initialize and start nodes
+	processes := []*exec.Cmd{}
+
 	var wg sync.WaitGroup
 	wg.Add(num)
 	for i := 0; i < num; i++ {
@@ -222,11 +223,21 @@ func main() {
 		defer outfile.Close()
 
 		go func(i int, outfile *os.File) {
-			initAndStart(i, genesis, outfile)
+			p := initAndStart(i, genesis, outfile)
+			processes = append(processes, p)
 			wg.Done()
 		}(i, outfile)
 	}
 	wg.Wait()
+
+	for i := 0; i < num; i++ {
+		go func(i int) {
+			err = processes[i].Wait()
+			if err != nil {
+				fmt.Printf("process %s failed!!! %s\n", keys[i], err)
+			}
+		}(i)
+	}
 
 	// wait for node to start
 	time.Sleep(time.Second * 5)
