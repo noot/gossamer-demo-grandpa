@@ -1,20 +1,29 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"strconv"
 	"sync"
 	"time"
 
 	"github.com/ChainSafe/gossamer/lib/common"
 )
+
+var keys = []string{"alice", "bob", "charlie", "dave", "eve", "ferdie", "george", "heather", "ian"}
+var genesisThreeAuths = "genesis_threeauths.json"
+var genesisSixAuths = "genesis_sixauths.json"
+var genesisNineAuths = "genesis.json"
+var config = "config.toml"
 
 var (
 	maxRetries        = 10
@@ -126,6 +135,54 @@ func getFinalizedHeadByRound(endpoint string, round uint64) (common.Hash, error)
 	return common.MustHexToHash(hash), nil
 }
 
+func initAndStart(idx int, genesis string, outfile *os.File) {
+	basepath := "~/.gossamer_" + keys[idx]
+
+	initCmd := exec.Command("../../ChainSafe/gossamer/bin/gossamer",
+		"init",
+		"--config", config,
+		"--basepath", basepath,
+		"--genesis", genesis,
+		"--force",
+	)
+
+	stdoutPipe, err := initCmd.StdoutPipe()
+	if err != nil {
+		panic(err)
+	}
+
+	writer := bufio.NewWriter(outfile)
+	// init gossamer
+	err = initCmd.Run()
+	if err != nil {
+		panic(err)
+	}
+
+	go io.Copy(writer, stdoutPipe)
+	fmt.Println("initialized node", keys[idx])
+
+	gssmrCmd := exec.Command("../../ChainSafe/gossamer/bin/gossamer",
+		"--port", strconv.Itoa(7000+idx),
+		"--config", config,
+		"--key", keys[idx],
+		"--basepath", basepath,
+		"--rpcport", strconv.Itoa(8540+idx),
+		"--rpc",
+	)
+
+	stdoutPipe, err = gssmrCmd.StdoutPipe()
+	if err != nil {
+		panic(err)
+	}
+
+	err = gssmrCmd.Start()
+	if err != nil {
+		panic(err)
+	}
+
+	go io.Copy(writer, stdoutPipe)
+}
+
 func main() {
 	baseport := 8540
 	num := 3
@@ -137,9 +194,45 @@ func main() {
 			fmt.Println(err)
 			os.Exit(1)
 		}
+
+		if num%3 != 0 {
+			fmt.Print("must do 3, 6, 9 nodes")
+			os.Exit(1)
+		}
 	}
 
+	var genesis string
+	switch num {
+	case 3:
+		genesis = genesisThreeAuths
+	case 6:
+		genesis = genesisSixAuths
+	case 9:
+		genesis = genesisNineAuths
+	}
+
+	// initialize and start nodes
+	var wg sync.WaitGroup
+	wg.Add(num)
+	for i := 0; i < num; i++ {
+		outfile, err := os.Create("./log_" + keys[i] + ".out")
+		if err != nil {
+			panic(err)
+		}
+		defer outfile.Close()
+
+		go func(i int, outfile *os.File) {
+			initAndStart(i, genesis, outfile)
+			wg.Done()
+		}(i, outfile)
+	}
+	wg.Wait()
+
+	// wait for node to start
+	time.Sleep(time.Second * 5)
+
 	rounds := 20
+	empty := [32]byte{}
 
 	// queqy for finalized block in each round
 	for i := 1; i < rounds; i++ {
@@ -152,9 +245,9 @@ func main() {
 
 			go func(round, node int) {
 				var res common.Hash
-				for k := 0; k < maxRetries; k++ {
+				for {
 					res, err = getFinalizedHeadByRound("http://localhost:"+strconv.Itoa(baseport+node), uint64(round))
-					if err == nil && !bytes.Equal(res[:], []byte{}) {
+					if err == nil && !bytes.Equal(res[:], empty[:]) {
 						break
 					}
 
@@ -163,10 +256,11 @@ func main() {
 
 				fmt.Printf("round %d: got finalized hash from node %d: %s\n", round, node, res)
 				wg.Done()
-			}(i, j)	
+			}(i, j)
 
 		}
 
 		wg.Wait()
+		time.Sleep(time.Second * 3)
 	}
 }
