@@ -230,6 +230,15 @@ func main() {
 	}
 	wg.Wait()
 
+	defer func() {
+		for i := 0; i < num; i++ {
+			err = processes[i].Process.Kill()
+			if err != nil {
+				fmt.Printf("could not kill process %s!!! %s\n", keys[i], err)
+			}
+		}
+	}()
+
 	for i := 0; i < num; i++ {
 		go func(i int) {
 			err = processes[i].Wait()
