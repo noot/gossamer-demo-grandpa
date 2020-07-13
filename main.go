@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ChainSafe/gossamer/dot/rpc/modules"
 	"github.com/ChainSafe/gossamer/lib/common"
 	"github.com/urfave/cli"
 )
@@ -40,7 +41,9 @@ var flags = []cli.Flag{
 var (
 	app = cli.NewApp()
 
-	keys = []string{"alice", "bob", "charlie", "dave", "eve", "ferdie", "george", "heather", "ian"}
+	keys        = []string{"alice", "bob", "charlie", "dave", "eve", "ferdie", "george", "heather", "ian"}
+	baseRPCPort = 8540
+	baseport    = 7000
 
 	genesisThreeAuths = "genesis_threeauths.json"
 	genesisSixAuths   = "genesis_sixauths.json"
@@ -156,7 +159,22 @@ func getFinalizedHeadByRound(endpoint string, round uint64) (common.Hash, error)
 	return common.MustHexToHash(hash), nil
 }
 
-func initAndStart(idx int, genesis string, outfile *os.File) *exec.Cmd {
+func getPeerID(endpoint string) (string, error) {
+	respBody, err := postRPC("system_networkState", endpoint, "[]")
+	if err != nil {
+		return "", err
+	}
+
+	networkState := new(modules.SystemNetworkStateResponse)
+	err = decodeRPC(respBody, &networkState)
+	if err != nil {
+		return "", err
+	}
+
+	return networkState.NetworkState.PeerID, nil
+}
+
+func initAndStart(idx int, genesis, bootnodes string, outfile *os.File) *exec.Cmd {
 	basepath := "~/.gossamer_" + keys[idx]
 
 	initCmd := exec.Command("../../ChainSafe/gossamer/bin/gossamer",
@@ -170,29 +188,33 @@ func initAndStart(idx int, genesis string, outfile *os.File) *exec.Cmd {
 	// init gossamer
 	stdout, err := initCmd.CombinedOutput()
 	if err != nil {
-		panic(err)
+		fmt.Printf("failed to initialize node %d: %s\n", idx, err)
+		os.Exit(1)
 	}
 
 	outfile.Write(stdout)
 	fmt.Println("initialized node", keys[idx])
 
 	gssmrCmd := exec.Command("../../ChainSafe/gossamer/bin/gossamer",
-		"--port", strconv.Itoa(7000+idx),
+		"--port", strconv.Itoa(baseport+idx),
 		"--config", config,
 		"--key", keys[idx],
 		"--basepath", basepath,
-		"--rpcport", strconv.Itoa(8540+idx),
+		"--rpcport", strconv.Itoa(baseRPCPort+idx),
 		"--rpc",
+		"--bootnodes", bootnodes,
 	)
 
 	stdoutPipe, err := gssmrCmd.StdoutPipe()
 	if err != nil {
-		panic(err)
+		fmt.Printf("failed to get stdoutPipe from node %d: %s\n", idx, err)
+		os.Exit(1)
 	}
 
 	err = gssmrCmd.Start()
 	if err != nil {
-		panic(err)
+		fmt.Printf("failed to start node %d: %s\n", idx, err)
+		os.Exit(1)
 	}
 
 	writer := bufio.NewWriter(outfile)
@@ -215,17 +237,16 @@ func main() {
 // TODO: add persistent node connects
 // TODO: update gossamer binary path
 func run(ctx *cli.Context) error {
-	baseport := 8540
-	num := 3
+	baseaddr := "/ip4/127.0.0.1/tcp/"
 	var err error
 
-	if len(os.Args) > 1 {
-		num = int(ctx.Uint(numFlag.Name))
-		if num%3 != 0 {
-			fmt.Print("must do 3, 6, 9 nodes")
-			os.Exit(1)
-		}
+	num := int(ctx.Uint(numFlag.Name))
+	if num%3 != 0 {
+		fmt.Print("must do 3, 6, 9 nodes")
+		os.Exit(1)
 	}
+
+	connect := ctx.Bool(connectFlag.Name)
 
 	fmt.Println("num nodes:", num)
 
@@ -244,6 +265,8 @@ func run(ctx *cli.Context) error {
 
 	var wg sync.WaitGroup
 	wg.Add(num)
+	var nodeAddr string // used for directly connecting nodes
+
 	for i := 0; i < num; i++ {
 		outfile, err := os.Create("./log_" + keys[i] + ".out")
 		if err != nil {
@@ -251,8 +274,27 @@ func run(ctx *cli.Context) error {
 		}
 		defer outfile.Close()
 
+		if connect && i == 0 {
+			// all other nodes will directly connect to the first node
+			// the other nodes are able to discover each other through the connection to the first node
+			// as well as mDNS
+			p := initAndStart(i, genesis, "", outfile)
+			processes = append(processes, p)
+			wg.Done()
+			time.Sleep(time.Second * 5)
+
+			peerID, err := getPeerID("http://localhost:" + strconv.Itoa(baseRPCPort))
+			if err != nil {
+				fmt.Println("failed to get peerID from first node")
+				return err
+			}
+			nodeAddr = baseaddr + strconv.Itoa(baseport) + "/p2p/" + peerID
+			fmt.Println("got node addr for node", nodeAddr)
+			continue
+		}
+
 		go func(i int, outfile *os.File) {
-			p := initAndStart(i, genesis, outfile)
+			p := initAndStart(i, genesis, nodeAddr, outfile)
 			processes = append(processes, p)
 			wg.Done()
 		}(i, outfile)
@@ -295,7 +337,7 @@ func run(ctx *cli.Context) error {
 			go func(round, node int) {
 				var res common.Hash
 				for {
-					res, err = getFinalizedHeadByRound("http://localhost:"+strconv.Itoa(baseport+node), uint64(round))
+					res, err = getFinalizedHeadByRound("http://localhost:"+strconv.Itoa(baseRPCPort+node), uint64(round))
 					if err == nil && !bytes.Equal(res[:], empty[:]) {
 						break
 					}
