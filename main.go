@@ -31,15 +31,22 @@ var (
 		Name:  "connect",
 		Usage: "directly connect nodes",
 	}
+
+	pathFlag = cli.StringFlag{
+		Name:  "path",
+		Usage: "path to gossamer binary",
+	}
 )
 
 var flags = []cli.Flag{
 	numFlag,
 	connectFlag,
+	pathFlag,
 }
 
 var (
-	app = cli.NewApp()
+	app          = cli.NewApp()
+	gossamerPath = "../../ChainSafe/gossamer/bin/gossamer"
 
 	keys        = []string{"alice", "bob", "charlie", "dave", "eve", "ferdie", "george", "heather", "ian"}
 	baseRPCPort = 8540
@@ -177,7 +184,7 @@ func getPeerID(endpoint string) (string, error) {
 func initAndStart(idx int, genesis, bootnodes string, outfile *os.File) *exec.Cmd {
 	basepath := "~/.gossamer_" + keys[idx]
 
-	initCmd := exec.Command("../../ChainSafe/gossamer/bin/gossamer",
+	initCmd := exec.Command(gossamerPath,
 		"init",
 		"--config", config,
 		"--basepath", basepath,
@@ -195,7 +202,7 @@ func initAndStart(idx int, genesis, bootnodes string, outfile *os.File) *exec.Cm
 	outfile.Write(stdout)
 	fmt.Println("initialized node", keys[idx])
 
-	gssmrCmd := exec.Command("../../ChainSafe/gossamer/bin/gossamer",
+	gssmrCmd := exec.Command(gossamerPath,
 		"--port", strconv.Itoa(baseport+idx),
 		"--config", config,
 		"--key", keys[idx],
@@ -247,6 +254,10 @@ func run(ctx *cli.Context) error {
 	}
 
 	connect := ctx.Bool(connectFlag.Name)
+	path := ctx.String(pathFlag.Name)
+	if path != "" {
+		gossamerPath = path
+	}
 
 	fmt.Println("num nodes:", num)
 
