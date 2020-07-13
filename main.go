@@ -17,15 +17,36 @@ import (
 	"time"
 
 	"github.com/ChainSafe/gossamer/lib/common"
+	"github.com/urfave/cli"
 )
 
-var keys = []string{"alice", "bob", "charlie", "dave", "eve", "ferdie", "george", "heather", "ian"}
-var genesisThreeAuths = "genesis_threeauths.json"
-var genesisSixAuths = "genesis_sixauths.json"
-var genesisNineAuths = "genesis.json"
-var config = "config.toml"
+var (
+	numFlag = cli.UintFlag{
+		Name:  "num",
+		Usage: "number of nodes",
+	}
+
+	connectFlag = cli.BoolFlag{
+		Name:  "connect",
+		Usage: "directly connect nodes",
+	}
+)
+
+var flags = []cli.Flag{
+	numFlag,
+	connectFlag,
+}
 
 var (
+	app = cli.NewApp()
+
+	keys = []string{"alice", "bob", "charlie", "dave", "eve", "ferdie", "george", "heather", "ian"}
+
+	genesisThreeAuths = "genesis_threeauths.json"
+	genesisSixAuths   = "genesis_sixauths.json"
+	genesisNineAuths  = "genesis.json"
+	config            = "config.toml"
+
 	maxRetries        = 10
 	httpClientTimeout = 120 * time.Second
 	dialTimeout       = 60 * time.Second
@@ -162,7 +183,6 @@ func initAndStart(idx int, genesis string, outfile *os.File) *exec.Cmd {
 		"--basepath", basepath,
 		"--rpcport", strconv.Itoa(8540+idx),
 		"--rpc",
-		"--log", "debug",
 	)
 
 	stdoutPipe, err := gssmrCmd.StdoutPipe()
@@ -180,18 +200,27 @@ func initAndStart(idx int, genesis string, outfile *os.File) *exec.Cmd {
 	return gssmrCmd
 }
 
+func init() {
+	app.Action = run
+	app.Flags = flags
+}
+
 func main() {
+	if err := app.Run(os.Args); err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+// TODO: add persistent node connects
+// TODO: update gossamer binary path
+func run(ctx *cli.Context) error {
 	baseport := 8540
 	num := 3
 	var err error
 
 	if len(os.Args) > 1 {
-		num, err = strconv.Atoi(os.Args[1])
-		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
-		}
-
+		num = int(ctx.Uint(numFlag.Name))
 		if num%3 != 0 {
 			fmt.Print("must do 3, 6, 9 nodes")
 			os.Exit(1)
@@ -274,4 +303,6 @@ func main() {
 		wg.Wait()
 		time.Sleep(time.Second * 3)
 	}
+
+	return nil
 }
