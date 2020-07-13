@@ -241,8 +241,6 @@ func main() {
 	}
 }
 
-// TODO: add persistent node connects
-// TODO: update gossamer binary path
 func run(ctx *cli.Context) error {
 	baseaddr := "/ip4/127.0.0.1/tcp/"
 	var err error
@@ -292,13 +290,21 @@ func run(ctx *cli.Context) error {
 			p := initAndStart(i, genesis, "", outfile)
 			processes = append(processes, p)
 			wg.Done()
-			time.Sleep(time.Second * 5)
 
-			peerID, err := getPeerID("http://localhost:" + strconv.Itoa(baseRPCPort))
+			var peerID string
+			for j := 0; j < maxRetries; j++ {
+				peerID, err = getPeerID("http://localhost:" + strconv.Itoa(baseRPCPort))
+				if err == nil {
+					break
+				}
+				time.Sleep(time.Second)
+			}
+
 			if err != nil {
 				fmt.Println("failed to get peerID from first node")
 				return err
 			}
+
 			nodeAddr = baseaddr + strconv.Itoa(baseport) + "/p2p/" + peerID
 			fmt.Println("got node addr for node", nodeAddr)
 			continue
@@ -330,7 +336,7 @@ func run(ctx *cli.Context) error {
 		}(i)
 	}
 
-	// wait for node to start
+	// wait for nodes to start
 	time.Sleep(time.Second * 5)
 
 	rounds := 20
